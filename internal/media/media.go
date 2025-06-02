@@ -75,3 +75,5 @@ func hashFilePath(path string) string {
 	hash := sha1.Sum([]byte(path))
 	return fmt.Sprintf("%x", hash)
 }
+
+

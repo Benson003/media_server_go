@@ -1,0 +1,187 @@
+basePath: /
+definitions:
+  database.MediaItem:
+    properties:
+      ext:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+    type: object
+  handlers.ErrorResponse:
+    properties:
+      error:
+        example: internal server error
+        type: string
+    type: object
+  handlers.PaginatedResponse:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/database.MediaItem'
+        type: array
+      number_of_elements:
+        type: integer
+      page:
+        type: integer
+      pages:
+        type: integer
+    type: object
+host: localhost:8000
+info:
+  contact:
+    email: your.email@example.com
+    name: Benson
+  description: This is the API for my media streaming server
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://example.com/terms/
+  title: Media Server API
+  version: "1.0"
+paths:
+  /media:
+    get:
+      description: Retrieves all media items from the database.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/database.MediaItem'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get all media items
+      tags:
+      - media
+  /media/{id}:
+    get:
+      description: Returns a single media item by its unique ID.
+      parameters:
+      - description: Media Item ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/database.MediaItem'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get media item by ID
+      tags:
+      - media
+  /media/{id}/stream:
+    get:
+      description: Streams the media file to the client supporting range requests.
+      parameters:
+      - description: Media Item ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - video/mp4
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Stream media file by ID
+      tags:
+      - media
+  /media/{id}/thumbnail:
+    get:
+      description: Extracts and returns a JPEG thumbnail from the media file at 4
+        seconds.
+      parameters:
+      - description: Media Item ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - image/jpeg
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get thumbnail image for media
+      tags:
+      - media
+  /media/paginated:
+    get:
+      description: Retrieves media items with pagination.
+      parameters:
+      - description: Page number, default 1
+        in: query
+        name: page
+        type: integer
+      - description: Number of items per page, default 10
+        in: query
+        name: count
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PaginatedResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get paginated media items
+      tags:
+      - media
+swagger: "2.0"

@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	database "media_server/internal/db"
 	"media_server/internal/logger"
 	"net/http"
@@ -10,23 +12,36 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	ffmpeg "github.com/u2takey/ffmpeg-go"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 type Handler struct {
-	DB *gorm.DB
+	DB     *gorm.DB
 	Logger *zap.Logger
 }
 
 type PaginatedResponse struct {
-	Items            []database.MediaItem`json:"items"`
-	NumberOfElements int         `json:"number_of_elements"`
-	Pages            int         `json:"pages"`
-	Page             int         `json:"page"`
-	Count            int         `json:"count"`
+	Items            []database.MediaItem `json:"items"`
+	NumberOfElements int                  `json:"number_of_elements"`
+	Pages            int                  `json:"pages"`
+	Page             int                  `json:"page"`
+	Count            int                  `json:"count"`
 }
 
+type ErrorResponse struct {
+	Error string `json:"error" example:"internal server error"`
+}
+
+// GetAll godoc
+// @Summary      Get all media items
+// @Description  Retrieves all media items from the database.
+// @Tags         media
+// @Produce      json
+// @Success      200  {array}   database.MediaItem
+// @Failure      500  {object}  handlers.ErrorResponse
+// @Router       /media [get]
 func (h *Handler) GetAll(w http.ResponseWriter, r *http.Request) {
 	items, err := database.GetAll(h.DB)
 	if err != nil {
@@ -42,12 +57,21 @@ func (h *Handler) GetAll(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// GetPaginatedHandler godoc
+// @Summary      Get paginated media items
+// @Description  Retrieves media items with pagination.
+// @Tags         media
+// @Produce      json
+// @Param        page   query     int  false  "Page number, default 1"
+// @Param        count  query     int  false  "Number of items per page, default 10"
+// @Success      200    {object}  PaginatedResponse
+// @Failure      400    {object}  handlers.ErrorResponse
+// @Failure      500    {object}  handlers.ErrorResponse
+// @Router       /media/paginated [get]
 func (h *Handler) GetPaginatedHandler(w http.ResponseWriter, r *http.Request) {
-	// Default values
 	page := 1
 	count := 10
 
-	// Parse page query param
 	if p := r.URL.Query().Get("page"); p != "" {
 		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
 			page = parsed
@@ -57,7 +81,6 @@ func (h *Handler) GetPaginatedHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Parse count query param
 	if c := r.URL.Query().Get("count"); c != "" {
 		if parsed, err := strconv.Atoi(c); err == nil && parsed > 0 {
 			count = parsed
@@ -89,68 +112,135 @@ func (h *Handler) GetPaginatedHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// GetByID godoc
+// @Summary      Get media item by ID
+// @Description  Returns a single media item by its unique ID.
+// @Tags         media
+// @Produce      json
+// @Param        id   path      string  true  "Media Item ID"
+// @Success      200  {object}  database.MediaItem
+// @Failure      400  {object}  handlers.ErrorResponse
+// @Failure      404  {object}  handlers.ErrorResponse
+// @Failure      500  {object}  handlers.ErrorResponse
+// @Router       /media/{id} [get]
 func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
-    id := chi.URLParam(r, "id")
-    if id == "" {
-        http.Error(w, "missing id parameter", http.StatusBadRequest)
-        return
-    }
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		http.Error(w, "missing id parameter", http.StatusBadRequest)
+		return
+	}
 
-    mediaItem, err := database.GetByID(h.DB, id)
-    if err != nil {
-        if errors.Is(err, gorm.ErrRecordNotFound) {
-            http.Error(w, "media item not found", http.StatusNotFound)
-            return
-        }
-        http.Error(w, "internal server error", http.StatusInternalServerError)
-        return
-    }
+	mediaItem, err := database.GetByID(h.DB, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "media item not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusOK)
-    if err := json.NewEncoder(w).Encode(mediaItem); err != nil {
-        // Log encoding error and send 500
-        logger.Log().Error("Failed to encode media item response", zap.Error(err))
-        http.Error(w, "internal server error", http.StatusInternalServerError)
-        return
-    }
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(mediaItem); err != nil {
+		logger.Log().Error("Failed to encode media item response", zap.Error(err))
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}
 }
 
+// StreamMedia godoc
+// @Summary      Stream media file by ID
+// @Description  Streams the media file to the client supporting range requests.
+// @Tags         media
+// @Produce      video/mp4
+// @Param        id   path      string  true  "Media Item ID"
+// @Success      200  {file}    binary
+// @Failure      400  {object}  handlers.ErrorResponse
+// @Failure      404  {object}  handlers.ErrorResponse
+// @Failure      500  {object}  handlers.ErrorResponse
+// @Router       /media/{id}/stream [get]
 func (h *Handler) StreamMedia(w http.ResponseWriter, r *http.Request) {
-    // Grab the ID from the route
-    id := chi.URLParam(r, "id")
-    if id == "" {
-        http.Error(w, "missing id parameter", http.StatusBadRequest)
-        return
-    }
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		http.Error(w, "missing id parameter", http.StatusBadRequest)
+		return
+	}
 
-    // Fetch media info from DB using your existing function
-    mediaItem, err := database.GetByID(h.DB, id)
-    if err != nil {
-        if errors.Is(err, gorm.ErrRecordNotFound) {
-            http.Error(w, "media item not found", http.StatusNotFound)
-        } else {
-            http.Error(w, "internal server error", http.StatusInternalServerError)
-        }
-        return
-    }
+	mediaItem, err := database.GetByID(h.DB, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "media item not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
 
-    // Open the actual file using the path stored in the database
-    file, err := os.Open(mediaItem.Path)
-    if err != nil {
-        http.Error(w, "failed to open media file", http.StatusInternalServerError)
-        return
-    }
-    defer file.Close()
+	file, err := os.Open(mediaItem.Path)
+	if err != nil {
+		http.Error(w, "failed to open media file", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
 
-    // Get file info for content headers and range support
-    fi, err := file.Stat()
-    if err != nil {
-        http.Error(w, "failed to get file info", http.StatusInternalServerError)
-        return
-    }
+	fi, err := file.Stat()
+	if err != nil {
+		http.Error(w, "failed to get file info", http.StatusInternalServerError)
+		return
+	}
 
-    // This handles Content-Length, Range requests, and streaming
-    http.ServeContent(w, r, mediaItem.Name, fi.ModTime(), file)
+	http.ServeContent(w, r, mediaItem.Name, fi.ModTime(), file)
 }
 
+// ThumbnailHandler godoc
+// @Summary      Get thumbnail image for media
+// @Description  Extracts and returns a JPEG thumbnail from the media file at 4 seconds.
+// @Tags         media
+// @Produce      image/jpeg
+// @Param        id   path      string  true  "Media Item ID"
+// @Success      200  {file}    binary
+// @Failure      404  {object}  handlers.ErrorResponse
+// @Failure      500  {object}  handlers.ErrorResponse
+// @Router       /media/{id}/thumbnail [get]
+func (h *Handler) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	mediaItem, err := database.GetByID(h.DB, id)
+	if err != nil {
+		http.Error(w, "media not found", http.StatusNotFound)
+		return
+	}
+
+	if _, err := os.Stat(mediaItem.Path); os.IsNotExist(err) {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	imgBytes, err := extractFrameAt4s(mediaItem.Path)
+	if err != nil {
+		logger.Log().Sugar().Errorf("failed to extract thumbnail: %v \n", err)
+		http.Error(w, "failed to generate thumbnail", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.WriteHeader(http.StatusOK)
+	w.Write(imgBytes)
+}
+
+func extractFrameAt4s(videoPath string) ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+
+	err := ffmpeg.Input(videoPath, ffmpeg.KwArgs{"ss": "4"}).
+		Output("pipe:", ffmpeg.KwArgs{
+			"vframes": "1",
+			"format":  "mjpeg",
+		}).
+		WithOutput(buf, os.Stderr).
+		Run()
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg-go error: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
