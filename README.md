@@ -77,7 +77,7 @@ A simple media streaming server written in Go — stream your videos, serve thum
 
 | Method | Path                    | Description              |
 | ------ | ----------------------- | ------------------------ |
-| GET    | `/media`                | Get paginated media list |
+| GET    | `/media/paginated?page=1&count=10`                | Get paginated media list |
 | GET    | `/media/all`            | Get all media items      |
 | GET    | `/media/{id}`           | Get media item by ID     |
 | GET    | `/media/{id}/stream`    | Stream media file        |
