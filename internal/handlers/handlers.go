@@ -1,175 +1,156 @@
 package handlers
 
 import (
-	"bytes"
 	"encoding/json"
-	"log"
+	"errors"
+	database "media_server/internal/db"
+	"media_server/internal/logger"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 
-	"github.com/Benson003/media_server/internal/media"
 	"github.com/go-chi/chi/v5"
-	ffmpeg "github.com/u2takey/ffmpeg-go"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type Handler struct {
-	mediaStore *media.MediaStore
+	DB *gorm.DB
+	Logger *zap.Logger
 }
 
-func NewHandler(mediaStore *media.MediaStore) *Handler {
-	return &Handler{mediaStore: mediaStore}
+type PaginatedResponse struct {
+	Items            []database.MediaItem`json:"items"`
+	NumberOfElements int         `json:"number_of_elements"`
+	Pages            int         `json:"pages"`
+	Page             int         `json:"page"`
+	Count            int         `json:"count"`
 }
 
-func (h *Handler) HandleGetAllMedia(w http.ResponseWriter, r *http.Request) {
-    ctx := r.Context()
-
-    // Parse query params
-    pageStr := r.URL.Query().Get("page")
-    limitStr := r.URL.Query().Get("limit")
-
-    page := 1
-    limit := 20 // default limit
-
-    if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
-        page = p
-    }
-    if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
-        limit = l
-    }
-
-    // Fetch all media (or better: fetch only the needed slice)
-    mediaList, err := h.mediaStore.GetAllMedia(ctx)
-    if err != nil {
-        http.Error(w, "Failed to get media list", http.StatusInternalServerError)
-        return
-    }
-
-    total := len(mediaList)
-    start := (page - 1) * limit
-    if start > total {
-        start = total
-    }
-    end := start + limit
-    if end > total {
-        end = total
-    }
-
-    pagedMedia := mediaList[start:end]
-
-    // Return paginated result with metadata
-    resp := map[string]interface{}{
-        "page":  page,
-        "limit": limit,
-        "total": total,
-        "data":  pagedMedia,
-    }
-
-    w.Header().Set("Content-Type", "application/json")
-    if err := json.NewEncoder(w).Encode(resp); err != nil {
-        http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-    }
-}
-
-
-func (h *Handler) HandleStreamMedia(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	ctx := r.Context()
-
-	mediaFile, err := h.mediaStore.GetMediaByID(ctx, id)
+func (h *Handler) GetAll(w http.ResponseWriter, r *http.Request) {
+	items, err := database.GetAll(h.DB)
 	if err != nil {
-		http.Error(w, "Failed to fetch media", http.StatusInternalServerError)
-		return
-	}
-
-	if mediaFile == nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	f, err := os.Open(filepath.Clean(mediaFile.Path))
-	if err != nil {
-		http.Error(w, "Could Not Opne File", http.StatusInternalServerError)
-		return
-	}
-	defer f.Close()
-
-	w.Header().Set("Content-type", "video/mp4")
-	w.Header().Set("Content-Disposition", "inline; filename=\""+mediaFile.Name+"\"")
-
-	fileInfo, err := f.Stat()
-	if err != nil {
-		http.Error(w, "Could not get file info", http.StatusInternalServerError)
-		return
-	}
-
-	http.ServeContent(w, r, mediaFile.Name, fileInfo.ModTime(), f)
-}
-func (h *Handler) HandleGetMediaInfo(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	ctx := r.Context()
-
-	mediaFile, err := h.mediaStore.GetMediaByID(ctx, id)
-	if err != nil {
-		http.Error(w, "Failed to fetch media info", http.StatusInternalServerError)
-		return
-	}
-	if mediaFile == nil {
-		http.NotFound(w, r)
+		h.Logger.Error("failed to fetch media", zap.Error(err))
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(mediaFile); err != nil {
+	if err := json.NewEncoder(w).Encode(items); err != nil {
+		h.Logger.Error("failed to encode response", zap.Error(err))
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) GetPaginatedHandler(w http.ResponseWriter, r *http.Request) {
+	// Default values
+	page := 1
+	count := 10
+
+	// Parse page query param
+	if p := r.URL.Query().Get("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
+		} else {
+			http.Error(w, "Invalid page parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Parse count query param
+	if c := r.URL.Query().Get("count"); c != "" {
+		if parsed, err := strconv.Atoi(c); err == nil && parsed > 0 {
+			count = parsed
+		} else {
+			http.Error(w, "Invalid count parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
+	items, numberOfElements, pages, err := database.GetPaginated(h.DB, page, count)
+	if err != nil {
+		h.Logger.Error("Failed to get paginated media", zap.Error(err))
+		http.Error(w, "Failed to get media", http.StatusInternalServerError)
+		return
+	}
+
+	resp := PaginatedResponse{
+		Items:            items,
+		NumberOfElements: numberOfElements,
+		Pages:            pages,
+		Page:             page,
+		Count:            count,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		h.Logger.Error("Failed to encode response", zap.Error(err))
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
 	}
 }
-func (h *Handler) HandleThumbnail(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	ctx := r.Context()
 
-	mediaFile, err := h.mediaStore.GetMediaByID(ctx, id)
-	if err != nil {
-		http.Error(w, "Failed to fetch media", http.StatusInternalServerError)
-		return
-	}
-	if mediaFile == nil {
-		http.NotFound(w, r)
-		return
-	}
+func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
+    id := chi.URLParam(r, "id")
+    if id == "" {
+        http.Error(w, "missing id parameter", http.StatusBadRequest)
+        return
+    }
 
-	videoPath := filepath.Clean(mediaFile.Path)
-	buf := bytes.NewBuffer(nil)
-
-	err = ffmpeg.Input(videoPath).
-		Filter("select", ffmpeg.Args{"gte(n\\,150)"}). // wrap in ffmpeg.Args
-		Output("pipe:", ffmpeg.KwArgs{"vframes": 1, "format": "mjpeg"}).
-		WithOutput(buf, nil).
-		Run()
-
-	if err != nil {
-		log.Printf("ffmpeg error generating thumbnail: %v", err)
-		http.Error(w, "Failed to generate thumbnail", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.Write(buf.Bytes())
-}
-
-func CORS(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Access-Control-Allow-Origin", "*")
-        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-        if r.Method == http.MethodOptions {
-            w.WriteHeader(http.StatusNoContent)
+    mediaItem, err := database.GetByID(h.DB, id)
+    if err != nil {
+        if errors.Is(err, gorm.ErrRecordNotFound) {
+            http.Error(w, "media item not found", http.StatusNotFound)
             return
         }
+        http.Error(w, "internal server error", http.StatusInternalServerError)
+        return
+    }
 
-        next.ServeHTTP(w, r)
-    })
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
+    if err := json.NewEncoder(w).Encode(mediaItem); err != nil {
+        // Log encoding error and send 500
+        logger.Log().Error("Failed to encode media item response", zap.Error(err))
+        http.Error(w, "internal server error", http.StatusInternalServerError)
+        return
+    }
 }
+
+func (h *Handler) StreamMedia(w http.ResponseWriter, r *http.Request) {
+    // Grab the ID from the route
+    id := chi.URLParam(r, "id")
+    if id == "" {
+        http.Error(w, "missing id parameter", http.StatusBadRequest)
+        return
+    }
+
+    // Fetch media info from DB using your existing function
+    mediaItem, err := database.GetByID(h.DB, id)
+    if err != nil {
+        if errors.Is(err, gorm.ErrRecordNotFound) {
+            http.Error(w, "media item not found", http.StatusNotFound)
+        } else {
+            http.Error(w, "internal server error", http.StatusInternalServerError)
+        }
+        return
+    }
+
+    // Open the actual file using the path stored in the database
+    file, err := os.Open(mediaItem.Path)
+    if err != nil {
+        http.Error(w, "failed to open media file", http.StatusInternalServerError)
+        return
+    }
+    defer file.Close()
+
+    // Get file info for content headers and range support
+    fi, err := file.Stat()
+    if err != nil {
+        http.Error(w, "failed to get file info", http.StatusInternalServerError)
+        return
+    }
+
+    // This handles Content-Length, Range requests, and streaming
+    http.ServeContent(w, r, mediaItem.Name, fi.ModTime(), file)
+}
+

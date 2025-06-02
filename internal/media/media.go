@@ -15,43 +15,41 @@ type Config struct {
 }
 
 type MediaFile struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
 	Name string `json:"name"`
 	Path string `json:"path"`
-	Ext string `json:"ext"`
+	Ext  string `json:"ext"`
 }
-
 
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
-	if err != nil{
-		return nil,err
+	if err != nil {
+		return nil, err
 	}
 	var config Config
 
 	if erro := json.Unmarshal(data, &config); erro != nil {
 		return nil, erro
 	}
-	return &config,nil
+	return &config, nil
 }
 
-
-func ScanMediaDirs(config Config)([]MediaFile,error)  {
+func ScanMediaDirs(config Config) ([]MediaFile, error) {
 	var files []MediaFile
-	for _ , dir := range config.MediaDirs{
+	for _, dir := range config.MediaDirs {
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() {
 				return nil
 			}
 
 			ext := strings.ToLower(filepath.Ext(path))
-			if contains(config.SupportedExtensions,ext){
+			if contains(config.SupportedExtensions, ext) {
 				id := hashFilePath(path)
 				files = append(files, MediaFile{
-					ID: id,
+					ID:   id,
 					Name: info.Name(),
 					Path: path,
-					Ext: ext,
+					Ext:  ext,
 				})
 
 			}
@@ -61,10 +59,10 @@ func ScanMediaDirs(config Config)([]MediaFile,error)  {
 			return nil, err
 		}
 	}
-	return files,nil
+	return files, nil
 }
 
-func contains(list []string,target string) bool {
+func contains(list []string, target string) bool {
 	for _, item := range list {
 		if item == target {
 			return true

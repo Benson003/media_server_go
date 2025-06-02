@@ -1,105 +1,118 @@
 package main
 
 import (
-	"context"
-	"database/sql"
-	"log"
+	"fmt"
+	database "media_server/internal/db"
+	handlers "media_server/internal/handlers"
+	"media_server/internal/logger"
+	"media_server/internal/media"
+	"net"
 	"net/http"
-	"strings"
+	"strconv"
 
-	"github.com/Benson003/media_server/internal/handlers"
-	"github.com/Benson003/media_server/internal/media"
+	"sync"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
-	_ "github.com/mattn/go-sqlite3"
+	"gorm.io/gorm"
 )
-const createTableSQL = `
-CREATE TABLE IF NOT EXISTS media (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    path TEXT NOT NULL,
-    ext TEXT
-);`
 
-func main(){
-	config ,err := media.LoadConfig("config.json")
-	if err != nil{
-		log.Printf("Failed to read config \n Reason: %v\n",err)
-		return
-	}
-	media_files,err := media.ScanMediaDirs(*config)
-	if err != nil{
-		log.Printf("Failed to load files \n Reason: %v\n",err)
-		return
-	}
-
-
-	dbConn,err := initDatabase("media.db")
-	if err != nil{
-		log.Printf("Failed to load database \n Reason: %v\n",err)
-		return
-	}
-	defer dbConn.Close()
-	mediaStore := media.NewMediaStore(dbConn)
-
-
-	ctx := context.Background()
-for _, file := range media_files {
-    ext := sql.NullString{String: "", Valid: false}
-    // Extract extension if you want
-    if dot := strings.LastIndex(file.Name, "."); dot != -1 {
-        ext.String = file.Name[dot+1:]
-        ext.Valid = true
-    }
-
-	err := mediaStore.InsertMediaIfNotExists(ctx, file)
+func main() {
+	const PORT int = 8000
+	addr := ":" + strconv.Itoa(PORT)
+	var mut sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(1)
+	logger.InitLogger(true)
+	config, err := media.LoadConfig("config.json")
 	if err != nil {
-		log.Printf("Failed to insert media %s: %v", file.Name, err)
+		logger.Log().Sugar().Error("failed to load config")
 	}
-}
+	logger.Log().Sugar().Info("loaded config sucesfully")
 
+	media_files, err := media.ScanMediaDirs(*config)
+	if err != nil {
+		logger.Log().Sugar().Errorf("failed to scan media %v\n", err)
+		return
+	}
 
+	db, err := database.InitDataBase("media.db")
+	if err != nil {
+		logger.Log().Sugar().Errorf("failed to create db: %v \n", err)
+		return
+	}
 
+	go func() {
+		defer wg.Done()
+		if err := syncDatabase(&media_files, &mut, db); err != nil {
+			logger.Log().Sugar().Panicf("failed to sync db: %v", err)
+			return
+		}
+	}()
+	logger.Log().Info("Syncing database")
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		logger.Log().Sugar().Errorf("failed to get network interfaces: %v", err)
+		return
+	}
+	var allowedOrigin string
+	var allowedOrigin2 string
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ip := ipNet.IP.To4(); ip != nil {
+				allowedOrigin = fmt.Sprintf("http://%s:4173", ip.String())
+				allowedOrigin2 = fmt.Sprintf("http://%s:5173", ip.String())
+				break
+			}
+		}
+	}
+	if allowedOrigin == "" {
+		panic("no local IP found")
+	}
 
-	r := chi.NewRouter()
-	h := handlers.NewHandler(mediaStore)
+	router := chi.NewRouter()
+	handle := handlers.Handler{DB: db, Logger: logger.Log()}
 
-
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"}, // Or specific origins like "http://192.168.0.123"
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+	router.Use(cors.Handler(cors.Options{
+		// AllowedOrigins:   []string{"https://foo.com"}, // Use this to allow specific origin hosts
+		AllowedOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173",allowedOrigin,allowedOrigin2},
+		Debug: true,
+		// AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: false,
-		MaxAge:           2500, // Max value: 600
+		MaxAge:           86400, // Maximum value not ignored by any of major browsers
 	}))
+	router.Get("/media/all", handle.GetAll)
+	router.Get("/media/{id}/stream", handle.StreamMedia)
+	router.Get("/media", handle.GetPaginatedHandler)
+	router.Get("/media/{id}", handle.GetByID)
 
-	r.Get("/media",h.HandleGetAllMedia)
-	r.Get("/media/{id}/stream", h.HandleStreamMedia)
-	r.Get("/media/{id}/info",h.HandleGetMediaInfo)
-	r.Get("/media/{id}/thumbnail",h.HandleThumbnail)
-
-	log.Println("Starting server on :8080")
-    if err := http.ListenAndServe(":8080", r); err != nil {
-        log.Fatalf("Server failed: %v", err)
-    }
+	logger.Log().Sugar().Infof("server started on http://127.0.0.1%v \n", addr)
+	if err := http.ListenAndServe(addr, router); err != nil {
+		logger.Log().Sugar().Errorf("server failed to start %v\n", err)
+		return
+	}
+	wg.Wait()
 }
-
-
-func initDatabase(name string)(*sql.DB,error){
-	dbConn,err := sql.Open("sqlite3",name)
-	if err != nil{
-		return nil,err
+func syncDatabase(media_files *[]media.MediaFile, mut *sync.Mutex, db *gorm.DB) error {
+	for _, media := range *media_files {
+		if _ ,err := database.GetByID(db,media.ID) ;err!= nil{
+		mut.Lock()
+		err := database.AddMediaItem(db, &database.MediaItem{
+			ID:   media.ID,
+			Name: media.Name,
+			Path: media.Path,
+			Ext:  media.Ext,
+		})
+		if err != nil {
+			logger.Log().Error("wrting an entry to the db failed")
+			return err
+		}
+		mut.Unlock()
+		logger.Log().Info("database entry succesfull")
 	}
-
-	if err := dbConn.Ping(); err != nil{
-		return nil,err
 	}
-
-	// Create table if it doesn't exist
-    if _, err := dbConn.Exec(createTableSQL); err != nil {
-        return nil, err
-    }
-
-	return dbConn,nil
+	return nil
 }
