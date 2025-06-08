@@ -41,7 +41,7 @@ type ErrorResponse struct {
 // @Produce      json
 // @Success      200  {array}   database.MediaItem
 // @Failure      500  {object}  handlers.ErrorResponse
-// @Router       /media [get]
+// @Router       /media/all [get]
 func (h *Handler) GetAll(w http.ResponseWriter, r *http.Request) {
 	items, err := database.GetAll(h.DB)
 	if err != nil {

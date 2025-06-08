@@ -120,8 +120,9 @@ func main() {
 }
 func syncDatabase(media_files *[]media.MediaFile, mut *sync.Mutex, db *gorm.DB) error {
 	for _, media := range *media_files {
+		mut.Lock()
 		if _, err := database.GetByID(db, media.ID); err != nil {
-			mut.Lock()
+
 			err := database.AddMediaItem(db, &database.MediaItem{
 				ID:   media.ID,
 				Name: media.Name,
@@ -132,9 +133,11 @@ func syncDatabase(media_files *[]media.MediaFile, mut *sync.Mutex, db *gorm.DB) 
 				logger.Log().Error("wrting an entry to the db failed")
 				return err
 			}
-			mut.Unlock()
+
 			logger.Log().Info("database entry succesfull")
 		}
+		mut.Unlock()
+
 	}
 	return nil
 }

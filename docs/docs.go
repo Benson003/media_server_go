@@ -12,7 +12,7 @@ const docTemplate = `{
         "termsOfService": "http://example.com/terms/",
         "contact": {
             "name": "Benson",
-            "email": "your.email@example.com"
+            "email": "nwankwobenson29@gmail.com"
         },
         "license": {
             "name": "MIT",
@@ -23,7 +23,7 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/media": {
+        "/media/all": {
             "get": {
                 "description": "Retrieves all media items from the database.",
                 "produces": [
