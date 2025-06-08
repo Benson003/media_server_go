@@ -7,18 +7,21 @@ import (
 	"fmt"
 	database "media_server/internal/db"
 	"media_server/internal/logger"
+	"media_server/internal/media"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/gorilla/websocket"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 type Handler struct {
-	DB     *gorm.DB
+	DB     *database.DBObject
 	Logger *zap.Logger
 }
 
@@ -33,6 +36,14 @@ type PaginatedResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error" example:"internal server error"`
 }
+type WSMessage struct {
+	Event string          `json:"event"`
+	Data  json.RawMessage `json:"data"`
+}
+
+type ConfigFolderPayload struct {
+	Folder []string `json:"folder"`
+}
 
 // GetAll godoc
 // @Summary      Get all media items
@@ -43,7 +54,7 @@ type ErrorResponse struct {
 // @Failure      500  {object}  handlers.ErrorResponse
 // @Router       /media/all [get]
 func (h *Handler) GetAll(w http.ResponseWriter, r *http.Request) {
-	items, err := database.GetAll(h.DB)
+	items, err := h.DB.GetAll()
 	if err != nil {
 		h.Logger.Error("failed to fetch media", zap.Error(err))
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -90,7 +101,7 @@ func (h *Handler) GetPaginatedHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items, numberOfElements, pages, err := database.GetPaginated(h.DB, page, count)
+	items, numberOfElements, pages, err := h.DB.GetPaginated(page, count)
 	if err != nil {
 		h.Logger.Error("Failed to get paginated media", zap.Error(err))
 		http.Error(w, "Failed to get media", http.StatusInternalServerError)
@@ -130,7 +141,7 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mediaItem, err := database.GetByID(h.DB, id)
+	mediaItem, err := h.DB.GetByID(id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, "media item not found", http.StatusNotFound)
@@ -166,7 +177,7 @@ func (h *Handler) StreamMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mediaItem, err := database.GetByID(h.DB, id)
+	mediaItem, err := h.DB.GetByID(id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			http.Error(w, "media item not found", http.StatusNotFound)
@@ -205,7 +216,7 @@ func (h *Handler) StreamMedia(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	mediaItem, err := database.GetByID(h.DB, id)
+	mediaItem, err := h.DB.GetByID(id)
 	if err != nil {
 		http.Error(w, "media not found", http.StatusNotFound)
 		return
@@ -243,4 +254,123 @@ func extractFrameAt4s(videoPath string) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+var configMutex sync.Mutex
+
+func (h *Handler) MediaConfigWS(conn *websocket.Conn) {
+	defer conn.Close()
+
+	send := func(event string, data any) {
+		msg := WSMessage{Event: event}
+		var err error
+		msg.Data, err = json.Marshal(data)
+		if err != nil {
+			h.Logger.Warn("Failed to marshal WS response", zap.Error(err))
+			return
+		}
+		if err := conn.WriteJSON(msg); err != nil {
+			h.Logger.Warn("Failed to send WS response", zap.Error(err))
+		}
+	}
+
+	for {
+		var msg WSMessage
+		if err := conn.ReadJSON(&msg); err != nil {
+			h.Logger.Warn("WebSocket read error", zap.Error(err))
+			break
+		}
+
+		configMutex.Lock()
+		cfg, err := media.LoadConfig()
+		if err != nil {
+			configMutex.Unlock()
+			send("error", "failed to load config")
+			continue
+		}
+
+		switch msg.Event {
+		case "add_folder":
+			var payload struct {
+				Folder string `json:"folder"`
+			}
+			if err := json.Unmarshal(msg.Data, &payload); err != nil {
+				send("error", "invalid payload")
+				configMutex.Unlock()
+				continue
+			}
+			if contains(cfg.MediaDirs, payload.Folder) {
+				send("error", "folder already exists")
+				configMutex.Unlock()
+				continue
+			}
+			cfg.MediaDirs = append(cfg.MediaDirs, payload.Folder)
+
+		case "remove_folder":
+			var payload struct {
+				Folder string `json:"folder"`
+			}
+			if err := json.Unmarshal(msg.Data, &payload); err != nil {
+				send("error", "invalid payload")
+				configMutex.Unlock()
+				continue
+			}
+			found := false
+			newDirs := []string{}
+			for _, f := range cfg.MediaDirs {
+				if f == payload.Folder {
+					found = true
+				} else {
+					newDirs = append(newDirs, f)
+				}
+			}
+			if !found {
+				send("error", "folder not found")
+				configMutex.Unlock()
+				continue
+			}
+			cfg.MediaDirs = newDirs
+
+		case "toggle_stream":
+			cfg.StreamOnDemand = !cfg.StreamOnDemand
+
+		case "fetch_config":
+			// Just send the current config without changes
+			send("config_data", cfg)
+			configMutex.Unlock()
+			continue
+
+		default:
+			send("error", "unknown event")
+			configMutex.Unlock()
+			continue
+		}
+
+		// Save updated config
+		if err := saveConfig(cfg); err != nil {
+			send("error", "failed to save config")
+			configMutex.Unlock()
+			continue
+		}
+		configMutex.Unlock()
+
+		send("config_updated", cfg)
+	}
+}
+
+func saveConfig(cfg *media.Config) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(media.GetConfigPath(), data, 0644)
+}
+
+func contains(slice []string, target string) bool {
+	for _, s := range slice {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }

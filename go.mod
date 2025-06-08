@@ -7,6 +7,7 @@ require github.com/mattn/go-sqlite3 v1.14.28 // indirect
 require (
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/go-chi/cors v1.2.1
+	github.com/gorilla/websocket v1.5.3
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.4
 	github.com/u2takey/ffmpeg-go v0.5.0
