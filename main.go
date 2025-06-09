@@ -139,6 +139,7 @@ func main() {
 		defer wg.Done()
 
 		wsRouter.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
+			logger.Log().Info("new connection recived")
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				http.Error(w, "Failed to upgrade", http.StatusInternalServerError)

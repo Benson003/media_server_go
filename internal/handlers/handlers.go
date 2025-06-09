@@ -258,106 +258,6 @@ func extractFrameAt4s(videoPath string) ([]byte, error) {
 
 var configMutex sync.Mutex
 
-func (h *Handler) MediaConfigWS(conn *websocket.Conn) {
-	defer conn.Close()
-
-	send := func(event string, data any) {
-		msg := WSMessage{Event: event}
-		var err error
-		msg.Data, err = json.Marshal(data)
-		if err != nil {
-			h.Logger.Warn("Failed to marshal WS response", zap.Error(err))
-			return
-		}
-		if err := conn.WriteJSON(msg); err != nil {
-			h.Logger.Warn("Failed to send WS response", zap.Error(err))
-		}
-	}
-
-	for {
-		var msg WSMessage
-		if err := conn.ReadJSON(&msg); err != nil {
-			h.Logger.Warn("WebSocket read error", zap.Error(err))
-			break
-		}
-
-		configMutex.Lock()
-		cfg, err := media.LoadConfig()
-		if err != nil {
-			configMutex.Unlock()
-			send("error", "failed to load config")
-			continue
-		}
-
-		switch msg.Event {
-		case "add_folder":
-			var payload struct {
-				Folder string `json:"folder"`
-			}
-			if err := json.Unmarshal(msg.Data, &payload); err != nil {
-				send("error", "invalid payload")
-				configMutex.Unlock()
-				continue
-			}
-			if contains(cfg.MediaDirs, payload.Folder) {
-				send("error", "folder already exists")
-				configMutex.Unlock()
-				continue
-			}
-			cfg.MediaDirs = append(cfg.MediaDirs, payload.Folder)
-
-		case "remove_folder":
-			var payload struct {
-				Folder string `json:"folder"`
-			}
-			if err := json.Unmarshal(msg.Data, &payload); err != nil {
-				send("error", "invalid payload")
-				configMutex.Unlock()
-				continue
-			}
-			found := false
-			newDirs := []string{}
-			for _, f := range cfg.MediaDirs {
-				if f == payload.Folder {
-					found = true
-				} else {
-					newDirs = append(newDirs, f)
-				}
-			}
-			if !found {
-				send("error", "folder not found")
-				configMutex.Unlock()
-				continue
-			}
-			cfg.MediaDirs = newDirs
-
-		case "toggle_stream":
-			cfg.StreamOnDemand = !cfg.StreamOnDemand
-
-		case "fetch_config":
-			// Just send the current config without changes
-			send("config_data", cfg)
-			configMutex.Unlock()
-			continue
-
-		default:
-			send("error", "unknown event")
-			configMutex.Unlock()
-			continue
-		}
-
-		// Save updated config
-		if err := saveConfig(cfg); err != nil {
-			send("error", "failed to save config")
-			configMutex.Unlock()
-			continue
-		}
-		configMutex.Unlock()
-
-		send("config_updated", cfg)
-	}
-}
-
 func saveConfig(cfg *media.Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -374,3 +274,156 @@ func contains(slice []string, target string) bool {
 	}
 	return false
 }
+
+
+func (h *Handler) handlePing(conn *websocket.Conn, send func(event string, data interface{})) {
+    send("pong", "ok")
+}
+
+func (h *Handler) handleFetchConfig(send func(event string, data interface{})) {
+    configMutex.Lock()
+    defer configMutex.Unlock()
+
+    cfg, err := media.LoadConfig()
+    if err != nil {
+        send("error", "failed to load config")
+        return
+    }
+    send("config_data", cfg)
+}
+
+func (h *Handler) handleAddFolder(data json.RawMessage, send func(event string, data interface{})) {
+    configMutex.Lock()
+    defer configMutex.Unlock()
+
+    cfg, err := media.LoadConfig()
+    if err != nil {
+        send("error", "failed to load config")
+        return
+    }
+
+    var payload struct {
+        Folder string `json:"folder"`
+    }
+    if err := json.Unmarshal(data, &payload); err != nil {
+        send("error", "invalid payload")
+        return
+    }
+
+    if contains(cfg.MediaDirs, payload.Folder) {
+        send("error", "folder already exists")
+        return
+    }
+
+    cfg.MediaDirs = append(cfg.MediaDirs, payload.Folder)
+
+    if err := saveConfig(cfg); err != nil {
+        send("error", "failed to save config")
+        return
+    }
+    send("config_updated", cfg)
+}
+
+func (h *Handler) handleRemoveFolder(data json.RawMessage, send func(event string, data interface{})) {
+    configMutex.Lock()
+    defer configMutex.Unlock()
+
+    cfg, err := media.LoadConfig()
+    if err != nil {
+        send("error", "failed to load config")
+        return
+    }
+
+    var payload struct {
+        Folder string `json:"folder"`
+    }
+    if err := json.Unmarshal(data, &payload); err != nil {
+        send("error", "invalid payload")
+        return
+    }
+
+    newDirs := make([]string, 0, len(cfg.MediaDirs))
+    found := false
+    for _, f := range cfg.MediaDirs {
+        if f == payload.Folder {
+            found = true
+        } else {
+            newDirs = append(newDirs, f)
+        }
+    }
+    if !found {
+        send("error", "folder not found")
+        return
+    }
+    cfg.MediaDirs = newDirs
+
+    if err := saveConfig(cfg); err != nil {
+        send("error", "failed to save config")
+        return
+    }
+    send("config_updated", cfg)
+}
+
+func (h *Handler) handleToggleStream(send func(event string, data interface{})) {
+    configMutex.Lock()
+    defer configMutex.Unlock()
+
+    cfg, err := media.LoadConfig()
+    if err != nil {
+        send("error", "failed to load config")
+        return
+    }
+
+    cfg.StreamOnDemand = !cfg.StreamOnDemand
+
+    if err := saveConfig(cfg); err != nil {
+        send("error", "failed to save config")
+        return
+    }
+    send("config_updated", cfg)
+}
+
+
+
+func (h *Handler) MediaConfigWS(conn *websocket.Conn) {
+    defer conn.Close()
+
+    send := func(event string, data interface{}) {
+        msg := map[string]interface{}{
+            "event": event,
+            "data":  data,
+        }
+        if err := conn.WriteJSON(msg); err != nil {
+            h.Logger.Warn("Failed to send WS response", zap.Error(err))
+        }
+    }
+
+    for {
+        var msg WSMessage
+        if err := conn.ReadJSON(&msg); err != nil {
+            h.Logger.Warn("WebSocket read error", zap.Error(err))
+            break
+        }
+
+        switch msg.Event {
+        case "ping":
+            h.handlePing(conn, send)
+
+        case "fetch_config":
+            h.handleFetchConfig(send)
+
+        case "add_folder":
+            h.handleAddFolder(msg.Data, send)
+
+        case "remove_folder":
+            h.handleRemoveFolder(msg.Data, send)
+
+        case "toggle_stream":
+            h.handleToggleStream(send)
+
+        default:
+            send("error", "unknown event")
+        }
+    }
+}
+
