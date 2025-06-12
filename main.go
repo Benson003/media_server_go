@@ -156,17 +156,22 @@ func main() {
 	}()
 
 	logger.Log().Info("Press 'q' then ENTER to quit.")
-
+	logger.Log().Info("Press 's' then ENTER to sync db.")
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		text := scanner.Text()
-		if text == "q" || text == "Q" {
+		switch text {
+		case "q":
 			logger.Log().Info("Quitting!")
 			ShutdownServers([]*http.Server{srv, wssrv})
 			wg.Wait()
 			break
+		case "s":
+			logger.Log().Info("Syncing, jk not implemented yet")
+			break
+		default:
+			logger.Log().Info("You typed:", zap.String("input", text))
 		}
-		logger.Log().Info("You typed:", zap.String("input", text))
 	}
 
 	if err := scanner.Err(); err != nil {
