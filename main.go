@@ -72,6 +72,10 @@ func main() {
 		logger.Log().Sugar().Panicf("failed to sync db: %v", err)
 		return
 	}
+	if err := dbObj.CheckForMissingMedia(config); err != nil {
+		logger.Log().Sugar().Panicf("failed to sync db: %v", err)
+		return
+	}
 
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -155,22 +159,54 @@ func main() {
 		}
 	}()
 
-	logger.Log().Info("Press 'q' then ENTER to quit.")
-	logger.Log().Info("Press 's' then ENTER to sync db.")
+	help()
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		text := scanner.Text()
 		switch text {
-		case "q":
+		case "quit":
 			logger.Log().Info("Quitting!")
 			ShutdownServers([]*http.Server{srv, wssrv})
 			wg.Wait()
 			break
-		case "s":
-			logger.Log().Info("Syncing, jk not implemented yet")
-			break
+		case "sync":
+			logger.Log().Info("Syncing")
+			logger.Log().Info("Syncing database")
+			media_files, err := config.ScanMediaDirs()
+			if err != nil {
+				logger.Log().Sugar().Errorf("failed to scan media %v\n", err)
+				return
+				}
+			if err := dbObj.SyncDatabase(&media_files); err != nil {
+				logger.Log().Sugar().Panicf("failed to sync db: %v", err)
+				return
+				}
+			if err := dbObj.CheckForMissingMedia(config); err != nil {
+				logger.Log().Sugar().Panicf("failed to sync db: %v", err)
+				return
+			}
+			logger.Log().Info("Syncing complete")
+			continue
+		case "refresh":
+			if err := dbObj.DeleteAll(); err != nil {
+				logger.Log().Sugar().Panicf("failed to sync db: %v", err)
+				return
+			}
+			if err := dbObj.SyncDatabase(&media_files); err != nil {
+				logger.Log().Sugar().Panicf("failed to sync db: %v", err)
+				return
+				}
+				logger.Log().Info("Refresh complete")
+				continue
+
+			case "help":
+				help()
+				continue
+
 		default:
 			logger.Log().Info("You typed:", zap.String("input", text))
+			help()
+			continue
 		}
 	}
 
@@ -178,6 +214,13 @@ func main() {
 		logger.Log().Error("Error reading input", zap.Error(err))
 	}
 
+}
+
+func help() {
+	logger.Log().Info("Type 'quit' then ENTER to quit.")
+	logger.Log().Info("Type 'sync' then ENTER to sync db.")
+	logger.Log().Info("Type 'refresh' then ENTER to clear db fetch all media.")
+	logger.Log().Info("Type 'help' then ENTER to show help.")
 }
 func ShutdownServers(servers []*http.Server) error {
 	logger.Log().Info("Shutting down servers gracefully...")

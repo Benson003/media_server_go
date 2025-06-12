@@ -107,6 +107,19 @@ func (object DBObject) GetByID(id string) (MediaItem, error) {
 	return item, nil
 }
 
+func (object DBObject) DeleteByID(id string) error {
+	// Optional: check if item exists
+	var item MediaItem
+	if err := object.DB.Where("id = ?", id).First(&item).Error; err != nil {
+		return err // not found or DB error
+	}
+	if err := object.DB.Delete(&item).Error; err != nil {
+		return err // delete failed
+	}
+
+	return nil
+}
+
 func (object DBObject) DeleteAll() error {
 	tx := object.DB.Begin()
 	if tx.Error != nil {
@@ -176,5 +189,54 @@ func (object DBObject) SyncDatabase(mediaFiles *[]media.MediaFile) error {
 	}
 
 	logger.Log().Sugar().Info("SyncDatabase completed successfully without errors")
+	return nil
+}
+
+func (object *DBObject)CheckForMissingMedia(config *media.Config)error{
+	var wg sync.WaitGroup
+	const maxConcurrentDeletes = 10
+	sem := make(chan struct{}, maxConcurrentDeletes)
+	current_files,err := config.ScanMediaDirs()
+	if err != nil {
+		logger.Log().Sugar().Errorf("failed to recan dir: %v",err)
+		return err
+	}
+
+	database_entries,err := object.GetAll()
+	if err != nil {
+		logger.Log().Sugar().Errorf("failed to fetch db: %v",err)
+		return err
+	}
+
+	existingFiles := make(map[string]struct{})
+
+	for _, file := range current_files {
+        existingFiles[file.ID] = struct{}{}
+    }
+
+
+
+	var missingFromDisk []MediaItem
+    for _, entry := range database_entries {
+        if _, exists := existingFiles[entry.ID]; !exists {
+            missingFromDisk = append(missingFromDisk, entry)
+        }
+    }
+	for _, missingFile := range missingFromDisk {
+		wg.Add(1)
+		sem <- struct{}{} // acquire slot
+
+		go func(file MediaItem) {
+			defer wg.Done()
+			defer func() { <-sem }() // release slot
+
+			if err := object.DeleteByID(file.ID); err != nil {
+				logger.Log().Sugar().Errorf("failed to delete ID %s: %v", file.ID, err)
+				// optional: sync.Once or error channel
+			}
+		}(missingFile)
+	}
+	wg.Wait()
+
 	return nil
 }
