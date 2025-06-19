@@ -53,7 +53,6 @@ func main() {
 		logger.Log().Sugar().Error("failed to load config")
 	}
 	logger.Log().Sugar().Info("loaded config sucesfully")
-
 	media_files, err := config.ScanMediaDirs()
 	if err != nil {
 		logger.Log().Sugar().Errorf("failed to scan media %v\n", err)
@@ -84,11 +83,13 @@ func main() {
 	}
 	var allowedOrigin string
 	var allowedOrigin2 string
+	var allowedOrigin3 string
 	for _, addr := range addrs {
 		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
 			if ip := ipNet.IP.To4(); ip != nil {
 				allowedOrigin = fmt.Sprintf("http://%s:4173", ip.String())
 				allowedOrigin2 = fmt.Sprintf("http://%s:5173", ip.String())
+				allowedOrigin3 = fmt.Sprintf("http://%s:3000", ip.String())
 				break
 			}
 		}
@@ -108,7 +109,7 @@ func main() {
 
 		router.Use(cors.Handler(cors.Options{
 			// AllowedOrigins:   []string{"https://foo.com"}, // Use this to allow specific origin hosts
-			AllowedOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173", allowedOrigin, allowedOrigin2, "http://127.0.0.1:8000", "http://localhost:8000", "http://localhost:8080"},
+			AllowedOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173", allowedOrigin, allowedOrigin2, allowedOrigin3, "http://127.0.0.1:8000", "http://localhost:8000", "http://localhost:8080", "http://127.0.0.1:3000", "http://localhost:3000", "http://192.168.27.96:5173"},
 			Debug:          true,
 			// AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
 			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -176,11 +177,11 @@ func main() {
 			if err != nil {
 				logger.Log().Sugar().Errorf("failed to scan media %v\n", err)
 				return
-				}
+			}
 			if err := dbObj.SyncDatabase(&media_files); err != nil {
 				logger.Log().Sugar().Panicf("failed to sync db: %v", err)
 				return
-				}
+			}
 			if err := dbObj.CheckForMissingMedia(config); err != nil {
 				logger.Log().Sugar().Panicf("failed to sync db: %v", err)
 				return
@@ -195,13 +196,13 @@ func main() {
 			if err := dbObj.SyncDatabase(&media_files); err != nil {
 				logger.Log().Sugar().Panicf("failed to sync db: %v", err)
 				return
-				}
-				logger.Log().Info("Refresh complete")
-				continue
+			}
+			logger.Log().Info("Refresh complete")
+			continue
 
-			case "help":
-				help()
-				continue
+		case "help":
+			help()
+			continue
 
 		default:
 			logger.Log().Info("You typed:", zap.String("input", text))

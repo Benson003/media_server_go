@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/json"
 	"errors"
@@ -9,12 +10,15 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	ffmpeg_go "github.com/u2takey/ffmpeg-go"
 )
 
 type Config struct {
 	MediaDirs           []string `json:"media_dirs"`
 	SupportedExtensions []string `json:"supported_extensions"`
 	StreamOnDemand      bool     `json:"on_demand"`
+	AllowedOrigins      []string `json:"allowed_origins"`
 }
 
 type MediaFile struct {
@@ -48,6 +52,13 @@ func LoadConfig() (*Config, error) {
 		return nil, erro
 	}
 	return &config, nil
+}
+
+func (config *Config) GetAlowedOrigns() (alllowed_origins []string, err error) {
+	if config.AllowedOrigins != nil {
+		return config.AllowedOrigins, nil
+	}
+	return nil, fmt.Errorf("Config not found")
 }
 
 func (config *Config) ScanMediaDirs() ([]MediaFile, error) {
@@ -152,4 +163,21 @@ func (config *Config) ToggleStreamOnDemand() error {
 // FetchConfig reloads the config from file, useful for syncing changes
 func FetchConfig() (*Config, error) {
 	return LoadConfig()
+}
+
+func ExtractFrameAt(videoPath string) ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+
+	err := ffmpeg_go.Input(videoPath, ffmpeg_go.KwArgs{"ss": "7"}).
+		Output("pipe:", ffmpeg_go.KwArgs{
+			"vframes": "1",
+			"format":  "mjpeg",
+		}).
+		WithOutput(buf, os.Stderr).
+		Run()
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg-go error: %w", err)
+	}
+
+	return buf.Bytes(), nil
 }

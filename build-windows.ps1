@@ -9,15 +9,5 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-Write-Host "Building 32-bit Windows executable..."
-$env:GOOS = "windows"
-$env:GOARCH = "386"
-go build -ldflags "-s -w" -o "media-server-windows-386.exe"
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to build 32-bit executable"
-    exit $LASTEXITCODE
-}
-
 Write-Host "Build complete. Executables:"
 Write-Host " - media-server-windows-amd64.exe"
-Write-Host " - media-server-windows-386.exe"

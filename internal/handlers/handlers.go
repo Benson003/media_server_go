@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"bytes"
+
 	"encoding/json"
 	"errors"
-	"fmt"
+
 	database "media_server/internal/db"
 	"media_server/internal/logger"
 	"media_server/internal/media"
@@ -15,7 +15,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
-	ffmpeg "github.com/u2takey/ffmpeg-go"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -227,7 +226,7 @@ func (h *Handler) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imgBytes, err := extractFrameAt4s(mediaItem.Path)
+	imgBytes, err := media.ExtractFrameAt(mediaItem.Path)
 	if err != nil {
 		logger.Log().Sugar().Errorf("failed to extract thumbnail: %v \n", err)
 		http.Error(w, "failed to generate thumbnail", http.StatusInternalServerError)
@@ -239,22 +238,7 @@ func (h *Handler) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(imgBytes)
 }
 
-func extractFrameAt4s(videoPath string) ([]byte, error) {
-	buf := bytes.NewBuffer(nil)
 
-	err := ffmpeg.Input(videoPath, ffmpeg.KwArgs{"ss": "4"}).
-		Output("pipe:", ffmpeg.KwArgs{
-			"vframes": "1",
-			"format":  "mjpeg",
-		}).
-		WithOutput(buf, os.Stderr).
-		Run()
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg-go error: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
 
 var configMutex sync.Mutex
 
@@ -426,4 +410,3 @@ func (h *Handler) MediaConfigWS(conn *websocket.Conn) {
         }
     }
 }
-
