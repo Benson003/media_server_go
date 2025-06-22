@@ -27,6 +27,8 @@ import (
 	"sync"
 	"time"
 
+
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
 	"github.com/gorilla/websocket"
@@ -40,6 +42,7 @@ import (
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
+
 
 func main() {
 	var wg sync.WaitGroup
@@ -104,12 +107,15 @@ func main() {
 	}
 	handle := handlers.Handler{DB: &dbObj, Logger: logger.Log()}
 
+
 	go func() {
 		defer wg.Done()
 
+
+
 		router.Use(cors.Handler(cors.Options{
 			// AllowedOrigins:   []string{"https://foo.com"}, // Use this to allow specific origin hosts
-			AllowedOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173", allowedOrigin, allowedOrigin2, allowedOrigin3, "http://127.0.0.1:8000", "http://localhost:8000", "http://localhost:8080", "http://127.0.0.1:3000", "http://localhost:3000", "http://192.168.27.96:5173","http://192.168.195.96:5173","*","http://192.168.143.96:5173"},
+			AllowedOrigins: []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173", allowedOrigin, allowedOrigin2, allowedOrigin3, "http://127.0.0.1:8000", "http://localhost:8000", "http://localhost:8080", "http://127.0.0.1:3000", "http://localhost:3000", "http://192.168.27.96:5173", "http://192.168.195.96:5173", "*", "http://192.168.143.96:5173"},
 			Debug:          true,
 			// AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
 			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
