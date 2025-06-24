@@ -1,4 +1,5 @@
 # Media Server API
+## I made a WebUI in svelte so it's at [Media Viewer](https://github.com/Benson003/media_server_ui)
 
 A simple media streaming server written in Go — stream your videos, serve thumbnails, and enjoy a slick REST API with pagination and Swagger docs.
 
