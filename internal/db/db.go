@@ -54,10 +54,12 @@ func InitDataBase(dbPath string) DBObject {
 }
 
 func (object DBObject) AddMediaItem(item *MediaItem) error {
+
 	result := object.DB.FirstOrCreate(item, MediaItem{ID: item.ID})
 	if result.Error != nil {
 		return result.Error
 	}
+	
 	if result.RowsAffected == 0 {
 		logger.Log().Sugar().Infof("Media %s already exists", item.ID)
 	} else {
@@ -150,6 +152,7 @@ func (object DBObject) SyncDatabase(mediaFiles *[]media.MediaFile) error {
 			defer wg.Done()
 			logger.Log().Sugar().Infof("Worker %d started", workerID)
 			for media := range jobs {
+
 				logger.Log().Sugar().Infof("Worker %d syncing media: %s", workerID, media.ID)
 				err := object.AddMediaItem(&MediaItem{
 					ID:   media.ID,

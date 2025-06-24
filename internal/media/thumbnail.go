@@ -2,22 +2,49 @@ package media
 
 import (
 	"fmt"
+	"media_server/internal/logger"
 	"os"
+	"path/filepath"
 )
 
-const cache_folder string = "thumbnail_cache"
+const cacheFolder string = "thumbnail_cache"
 
-func PreGenrateThumbnails() error {
+func PreGenerateThumbnail(m *MediaFile) error {
 	if err := preCheckForFolder(); err != nil {
-		return fmt.Errorf("check failed due to: %v", err)
+		return fmt.Errorf("check failed: %v", err)
+	}
+	logger.Log().Info("Thumbnail cache folder ready")
+
+	image,err := ExtractFrameAt(m.Path)
+	if(err != nil){
+		return fmt.Errorf("error creating image: %v",err)
+	}
+	filename := filepath.Join(cacheFolder, m.ID + ".jpg")
+	if err := saveImageToFile(filename,image); err != nil{
+		return fmt.Errorf("failed to create thumbnail: %v",err)
+	}
+	return nil
+}
+func FetchPreGeneratedThumbnails(){
+	
+}
+
+func saveImageToFile(filename string, data []byte) error {
+	err := os.WriteFile(filename, data, 0644) // 0644 = -rw-r--r--
+	if err != nil {
+		return fmt.Errorf("failed to save image to file: %w", err)
 	}
 	return nil
 }
 
+
+
 func preCheckForFolder() error {
-	err := os.Mkdir(cache_folder, 0750)
-	if err != nil && os.IsExist(err) {
-		return fmt.Errorf("failed to create cache folder: %e", err)
+	if _, err := os.Stat(cacheFolder); os.IsNotExist(err) {
+		// Doesn't exist — try to create
+		if err := os.Mkdir(cacheFolder, 0750); err != nil {
+			return fmt.Errorf("failed to create folder: %v", err)
+		}
 	}
-	return nil
+	return nil // Either already exists or created successfully
 }
